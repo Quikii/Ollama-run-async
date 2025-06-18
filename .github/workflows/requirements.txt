@@ -1,0 +1,5 @@
+pandas
+numpy
+tqdm
+ollama
+nest_asyncio
