@@ -216,7 +216,7 @@ That protects your single-GPU Ollama from overload if you accidentally set
 
 ### How to reason about the two inputs
 
-|Goal|Raise…|…and maybe lower…|
+|Goal|Raise:|Lower:|
 |---|---|---|
 |**Throughput** (lots of rows)|`workers` first, then `batch_size`|—|
 |**GPU memory OK, but HTTP latency high**|`batch_size`|—|
