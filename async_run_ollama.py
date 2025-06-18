@@ -155,6 +155,7 @@ async def analyze_dataframe(
     df: pd.DataFrame,
     text_column: str = "text",
     workers: int = 3,
+    chunk_size: int | None = None,
     batch_size: int = 4,
     max_concurrent_calls: int | None = None,
     *,
@@ -171,26 +172,30 @@ async def analyze_dataframe(
     if len(model_names) != workers:
         raise ValueError("len(model_names) must equal workers")
 
-    chunks = np.array_split(df, workers)
-    sem    = aSYNC_SEM(max_concurrent_calls or workers)
-
-    # buffer → per-row: dict for fan-out, else str|None
+    sem = aSYNC_SEM(max_concurrent_calls or workers)
+    
+    # buffer stays the same, but declare it *before* the loop
     buf: List[dict[str,str] | str | None] = [ {} if fanout else None for _ in range(len(df)) ]
-
-    await asyncio.gather(*[
-        _worker_plain(
-            chunk,
-            text_column=text_column,
-            out=buf,
-            semaphore=sem,
-            model_name=model_names[i],
-            prompt_template=prompt_template,
-            json_keys=json_keys,
-            fanout=fanout,
-            batch_size=batch_size,
-        )
-        for i, chunk in enumerate(chunks)
-    ])
+    
+    outer_steps = range(0, len(df), chunk_size or len(df))
+    for start in tqdm(outer_steps, desc="DF chunks"):
+        sub_df = df.iloc[start : start + (chunk_size or len(df))]
+        sub_chunks = np.array_split(sub_df, workers)
+    
+        await asyncio.gather(*[
+            _worker_plain(
+                sub_chunk,
+                text_column=text_column,
+                out=buf,
+                semaphore=sem,
+                model_name=model_names[i],
+                prompt_template=prompt_template,
+                json_keys=json_keys,
+                fanout=fanout,
+                batch_size=batch_size,
+            )
+            for i, sub_chunk in enumerate(sub_chunks)
+        ])
 
     result = df.copy()
 
@@ -231,6 +236,7 @@ def run_analysis(
     workers: int = 3,
     max_concurrent_calls: int | None = None,
     *,
+    chunk_size: int | None = None,
     batch_size: int = 4,
     model_names: List[str] | str = MODEL_NAME,
     prompt_template: str | None = None,
@@ -245,6 +251,7 @@ def run_analysis(
 
     coro = analyze_dataframe(
         df, text_column, workers, max_concurrent_calls,
+        chunk_size=chunk_size,
         model_names=model_names,
         prompt_template=prompt_template,
         json_keys=json_keys,
