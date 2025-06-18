@@ -92,13 +92,38 @@ async def _worker_plain(
     prompt_template: str | None,
     json_keys: tuple[str, ...] | None,
     fanout: bool,
+    batch_size: int,                    # NEW PARAM
 ) -> None:
+    """Process one DataFrame slice on a dedicated AsyncClient.
+
+    Queues up to `batch_size` prompts before awaiting the model response,
+    mirroring the batching logic used in the CSV helper.
+    """
     client = AsyncClient()
     try:
+        buf_tasks: list[asyncio.Task] = []
+        buf_idx:   list[int]          = []
+
+        async def _flush() -> None:
+            """Await queued tasks and write replies into `out`."""
+            for ridx, reply in zip(buf_idx, await asyncio.gather(*buf_tasks)):
+                if fanout:
+                    out[ridx][model_name] = reply          # type: ignore[index]
+                else:
+                    out[ridx] = reply                      # type: ignore[index]
+            buf_tasks.clear()
+            buf_idx.clear()
+
+        # iterate over rows in *this* worker's slice
         for idx, row in chunk.iterrows():
             user_text = str(row[text_column])
-            prompt    = prompt_template.format(text=user_text) if prompt_template else user_text
+            prompt = (
+                prompt_template.format(text=user_text)
+                if prompt_template else
+                user_text
+            )
 
+            # build messages
             if json_keys:
                 messages = [
                     {"role": "system", "content": _json_system_prompt(json_keys)},
@@ -107,14 +132,22 @@ async def _worker_plain(
             else:
                 messages = [{"role": "user", "content": prompt}]
 
+            # create the task under semaphore protection
             async with semaphore:
-                reply = await _chat_single(client, messages, model_name=model_name)
+                task = asyncio.create_task(
+                    _chat_single(client, messages, model_name=model_name)
+                )
+            buf_tasks.append(task)
+            buf_idx.append(idx)
 
-            if fanout:
-                # store per-model replies in a dict
-                out[idx][model_name] = reply      # type: ignore[index]
-            else:
-                out[idx] = reply                  # type: ignore[index]
+            # flush when batch is full
+            if len(buf_tasks) == batch_size:
+                await _flush()
+
+        # flush remaining prompts
+        if buf_tasks:
+            await _flush()
+
     finally:
         await _maybe_aclose(client)
 
@@ -122,6 +155,7 @@ async def analyze_dataframe(
     df: pd.DataFrame,
     text_column: str = "text",
     workers: int = 3,
+    batch_size: int = 4,
     max_concurrent_calls: int | None = None,
     *,
     model_names: List[str] | str = MODEL_NAME,
@@ -153,6 +187,7 @@ async def analyze_dataframe(
             prompt_template=prompt_template,
             json_keys=json_keys,
             fanout=fanout,
+            batch_size=batch_size,
         )
         for i, chunk in enumerate(chunks)
     ])
@@ -196,6 +231,7 @@ def run_analysis(
     workers: int = 3,
     max_concurrent_calls: int | None = None,
     *,
+    batch_size: int = 4,
     model_names: List[str] | str = MODEL_NAME,
     prompt_template: str | None = None,
     json_keys: tuple[str, ...] | None = None,
@@ -213,6 +249,7 @@ def run_analysis(
         prompt_template=prompt_template,
         json_keys=json_keys,
         fanout=fanout,
+        batch_size=batch_size,
     )
 
     if loop and loop.is_running():
