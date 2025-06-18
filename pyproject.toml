@@ -1,5 +1,5 @@
 [project]
-name = "ollama_run_async"
+name = "ollama-run-async"
 version = "0.1.8"
 description = "Async Ollama helpers for analysis of documents stored in a datafrae."
 authors = [{name = "Quido Haškovec"}]
