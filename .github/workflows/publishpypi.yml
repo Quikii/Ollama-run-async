@@ -10,7 +10,8 @@ jobs:
     runs-on: ubuntu-latest
 
     permissions:                # needed for reading repo contents
-      contents: write
+      contents: read
+      id-token: write                                                                                
 
     steps:
     - uses: actions/checkout@v4
