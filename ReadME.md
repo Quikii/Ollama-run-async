@@ -46,6 +46,7 @@ run_analysis(
     model_names: str | list[str] = "llama3.2",
     prompt_template: str | None = None,
     json_keys: tuple[str, ...] | None = None,
+    batch_size: int = 4,          
     fanout: bool = False,
 ) -> pd.DataFrame
 ```
@@ -53,11 +54,13 @@ run_analysis(
 |Parameter|Default|Purpose|
 |---|---|---|
 |`df`, `text_column`|—|DataFrame and column to process.|
-|`workers`|3|Parallel `AsyncClient`s.|
-|`model_names`|`"llama3.2"`|Single model for all workers **or** list (one per worker).|
-|`prompt_template`|`None`|Format string; `{text}` is replaced by row text.|
-|`json_keys`|`None`|If set, model must return one JSON object with these keys; columns are created per key.|
-|`fanout`|`False`|`False` → models split the DataFrame. `True` → **every** model analyses **every** row and extra columns are suffixed with `_<model>` (e.g. `label_llama3.2`).|
+|`workers`|3|Number of parallel **`AsyncClient`** workers (row-level sharding).|
+|`model_names`|`"llama3.2"`|Single model for all workers **or** list (one tag per worker).|
+|`prompt_template`|`None`|Format string; `{text}` is replaced by the row text.|
+|`json_keys`|`None`|If set, the model must return **one JSON object** with these keys; a column is added per key (or per key + model when `fanout=True`).|
+|`batch_size`|4|**Prompts queued per worker before awaiting** the model response. Larger = fewer HTTP round-trips & better GPU utilisation, but more VRAM used during generation.|
+|`fanout`|`False`|`False` → models split the DataFrame. `True` → **every model analyses every row**; output columns are suffixed with `_<model>` (e.g. `label_llama3.2`).|
+
 
 ---
 
@@ -128,7 +131,7 @@ fill_missing_fields_from_csv(
 
 ### One worker ≈ one Ollama “session”
 
-Internally each worker creates its own `AsyncClient`, which translates to an
+Internally, each worker creates its own `AsyncClient`, which translates to an
 independent streaming connection and an independent copy of the model held in
 GPU (or CPU) memory:
 
