@@ -1,17 +1,8 @@
 # parallel_llama_df_analysis.py
 """
-Asynchronous helpers for Ollama llama3.2 — now with **flexible field mapping**
+Asynchronous helpers for Ollama models**
 ============================================================================
 
-You can still:
-1. **Analyse a DataFrame column** in parallel (`run_analysis`).
-2. **Fill missing structured fields** in a large CSV (`fill_missing_fields_from_csv`).
-
-New in this revision
---------------------
-* `fill_missing_fields_from_csv()` now lets you override the JSON keys and the
-  DataFrame columns they map to via the `json_fields` and `col_map` arguments.
-* Works in notebooks and scripts; safely closes any Ollama `AsyncClient`.
 """
 
 from __future__ import annotations
@@ -250,13 +241,16 @@ def run_analysis(
         pass
 
     coro = analyze_dataframe(
-        df, text_column, workers, max_concurrent_calls,
-        chunk_size=chunk_size,
+        df=df,
+        text_column=text_column,
+        workers=workers,
+        chunk_size=chunk_size,                 # ← explicit
+        batch_size=batch_size,                 # ← explicit
+        max_concurrent_calls=max_concurrent_calls,   # ← explicit
         model_names=model_names,
         prompt_template=prompt_template,
         json_keys=json_keys,
         fanout=fanout,
-        batch_size=batch_size,
     )
 
     if loop and loop.is_running():
