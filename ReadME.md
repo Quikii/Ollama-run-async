@@ -46,21 +46,22 @@ run_analysis(
     model_names: str | list[str] = "llama3.2",
     prompt_template: str | None = None,
     json_keys: tuple[str, ...] | None = None,
-    batch_size: int = 4,          
+    batch_size: int = 4,
+    chunk_size: int | None = None,      
     fanout: bool = False,
 ) -> pd.DataFrame
 ```
 
-|Parameter|Default|Purpose|
-|---|---|---|
-|`df`, `text_column`|—|DataFrame and column to process.|
-|`workers`|3|Number of parallel **`AsyncClient`** workers (row-level sharding).|
-|`model_names`|`"llama3.2"`|Single model for all workers **or** list (one tag per worker).|
-|`prompt_template`|`None`|Format string; `{text}` is replaced by the row text.|
-|`json_keys`|`None`|If set, the model must return **one JSON object** with these keys; a column is added per key (or per key + model when `fanout=True`).|
-|`batch_size`|4|**Prompts queued per worker before awaiting** the model response. Larger = fewer HTTP round-trips & better GPU utilisation, but more VRAM used during generation.|
-|`fanout`|`False`|`False` → models split the DataFrame. `True` → **every model analyses every row**; output columns are suffixed with `_<model>` (e.g. `label_llama3.2`).|
-
+| Parameter           | Default      | Purpose                                                                                                                                                      |
+| ------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `df`, `text_column` | —            | DataFrame and column to process.                                                                                                                             |
+| `workers`           | 3            | Number of parallel **`AsyncClient`** workers (row-level sharding).                                                                                           |
+| `model_names`       | `"llama3.2"` | Single model for all workers **or** list (one tag per worker).                                                                                               |
+| `prompt_template`   | `None`       | Format string; `{text}` is replaced by the row text.                                                                                                         |
+| `json_keys`         | `None`       | If set, the model must return **one JSON object** with these keys; a column is added per key (or per key + model when `fanout=True`).                        |
+| `batch_size`        | 4            | **Prompts queued per worker before awaiting** the model response. Larger = fewer HTTP round-trips & better GPU utilisation, but more VRAM during generation. |
+| `chunk_size`        | `None`       | Stream the DataFrame in outer chunks of this many rows (keeps RAM bounded). `None` → process the whole frame in one pass.                                    |
+| `fanout`            | `False`      | `False` → models split the DataFrame. `True` → **every model analyses every row**; output columns are suffixed with `_<model>` (e.g. `label_llama3.2`).      |
 
 ---
 
@@ -170,8 +171,7 @@ There are **two inputs** that decide throughput and memory use:
 
 #### 1. Outer chunking _(streaming only for huge CSVs)_
 
-`fill_missing_fields_from_csv()` reads `chunk_size` rows at a time so RAM stays bounded.  
-`run_analysis()` takes the whole DataFrame (already in memory).
+Reads `chunk_size` rows at a time so RAM stays bounded. In `run_analysis()` defaults to whole dataset in `fill_missing_fields_from_csv` 20 000 rows.
 
 #### 2. Split that chunk among **W workers**
 
@@ -188,7 +188,7 @@ Each worker:
 2. Iterates over its slice row-by-row.
     
 
-#### 3. Inner batching _(only in CSV helper)_
+#### 3. Inner batching 
 
 ```python
 buf_prompts.append(prompt)
