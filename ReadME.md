@@ -1,5 +1,5 @@
 
-The functions presented makes it simple for researchers in social sciences to run several Large Language Models loaded through Ollama asynchronously, at once. As such, all models used here have to be downloaded through the Ollama interface (https://ollama.com/). 
+The functions presented in this package make it simple for researchers in social sciences to run several Large Language Models loaded through Ollama over documents stored in a .csv file asynchronously (at once). As such, all models used here have to be downloaded through the Ollama interface (https://ollama.com/). 
 
 The functions can do two main things:
 
@@ -8,7 +8,7 @@ The functions can do two main things:
 
 I present two functions that both can split and fan out over the dataframe, but do so in a slightly different way:
 1. **`run_analysis()`:** Allows you to write one prompt, which then either splits or fans out over the text in the dataframe. The common tasks would be text labeling or sentiment analysis. The answer to the prompt might be conveniently structured in a JSON object, with specifiable keys.
-2. `fill_missing_fields_from_csv()`: Instead of writing a prompt, the second function is specifically designed for information extraction from the text (with the primary use case being metadata collection). It also allows for an output in a JSON format. Crucially, it also handles existing metadata information in the dataframe, so the model only extracts information that is not yet present. 
+2. **`fill_missing_fields_from_csv()`**: Instead of writing a prompt, the second function is specifically designed for information extraction from the text (with the primary use case being metadata collection). It also allows for an output in a JSON format. Crucially, it also handles existing metadata information in the dataframe, so the model only extracts information that is not yet present. 
 
 
 ---
@@ -124,19 +124,6 @@ fill_missing_fields_from_csv(
 )
 ```
 
-### CLI
-
-```bash
-# every model on every row (fan-out)
-python async_run_ollama.py events.csv \
-       --output_csv out.csv \
-       --models llama3.2,mistral \
-       --fanout \
-       --json_fields Occasion,City
-```
-
----
-
 ## How parallelisation works in the code
 
 ### One worker ≈ one Ollama “session”
@@ -167,6 +154,76 @@ worker-2 ─┘ └─▶ llama3.2-1B (GPU slot 0)             model fits multip
 |------|--------------|--------|-------------|
 | **Split** (`fanout=False`) | Each worker/model gets a distinct slice of the DataFrame/CSV. | ① One model copy *per different tag*.<br>② Activations scale with `workers`. | Max throughput when you have *many* rows. |
 | **Fan-out** (`fanout=True`) | Every model analyses **every** row – workers loop through rows multiple times. | Same as split, but activations stack for each model on the same row (so memory ≈ *models* × 0.5 GB during generation). | Comparing answers from several models side-by-side. |
+
+### *Split* Parallelism Step-by-step flow 
+There are **two inputs** that decide throughput and memory use:
+
+| Lever             | Variable                                               | What it controls                                                                                                   | Analogy                                             |
+| ----------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------- |
+| **1. Workers**    | `workers=`                                             | How the _whole_ dataset/CSV chunk is **sharded** into pieces that run _concurrently_ (independent `AsyncClient`s). | Number of checkout lanes in a supermarket           |
+| **2. Batch size** | `batch_size=` (only in `fill_missing_fields_from_csv`) | How many prompts a **single worker** queues before awaiting the model’s response.                                  | Customer “basket” per lane before the cashier scans |
+
+---
+
+#### 1. Outer chunking _(streaming only for huge CSVs)_
+
+`fill_missing_fields_from_csv()` reads `chunk_size` rows at a time so RAM stays bounded.  
+`run_analysis()` takes the whole DataFrame (already in memory).
+
+#### 2. Split that chunk among **W workers**
+
+```python
+parts = np.array_split(chunk, workers)
+```
+
+_If `workers = 3` and the chunk has 90 000 rows → 30 000 rows each._
+
+Each worker:
+
+1. Instantiates its own `AsyncClient(model_tag)`.
+    
+2. Iterates over its slice row-by-row.
+    
+
+#### 3. Inner batching _(only in CSV helper)_
+
+```python
+buf_prompts.append(prompt)
+if len(buf_prompts) == batch_size:
+    responses = model.generate(buf_prompts)
+```
+
+_If `batch_size = 4` the worker fires 4 prompts at once, then awaits the single streaming response that contains 4 completions._
+
+_Pros:_ fewer HTTP round-trips, better GPU utilisation.  
+_Cons:_ 4× token activations in VRAM for that worker during generation.
+
+#### 4. Global semaphore
+
+```python
+async with semaphore:   # semaphore size = workers
+    await client.chat(...)
+```
+
+Keeps __at most `workers` simultaneous_ requests_* across all workers.  
+That protects your single-GPU Ollama from overload if you accidentally set  
+`workers` very high.
+
+---
+
+### How to reason about the two inputs
+
+|Goal|Raise…|…and maybe lower…|
+|---|---|---|
+|**Throughput** (lots of rows)|`workers` first, then `batch_size`|—|
+|**GPU memory OK, but HTTP latency high**|`batch_size`|—|
+|**GPU VRAM limited**|—|`workers` and/or `batch_size`|
+|**CPU-bound (no GPU)**|`batch_size` (more efficient streaming)|keep `workers` modest (2-3)|
+
+> **Rule of thumb**  
+> _Workers_ scale with **number of CPU cores**; _batch size_ scales with **model size & VRAM**.  
+> For a 24 GB GPU: Llama-3-Instruct-8B can usually handle `batch_size=6` × `workers=4` without OOM.
+
 
 ### Example
 
@@ -216,6 +273,79 @@ Ollama will then swap models in-and-out between requests, trading memory for
 slightly lower throughput.
 
 ---
+
+### Example 2
+Below is a **split-mode** scenario that exercises _both_ levers —  
+`workers` **and** `batch_size` — so you can see how they interact.
+
+```python
+from ollama_run_async import fill_missing_fields_from_csv
+
+fill_missing_fields_from_csv(
+    input_csv="events.csv",       # 120 000 rows total
+    output_csv="events_filled.csv",
+    chunk_size=40_000,            # 3 outer chunks streamed
+    workers=4,                    # 4 AsyncClients ⇒ 10 000 rows each per chunk
+    batch_size=6,                 # each worker fires 6 prompts at once
+    json_fields=("Occasion", "City"),
+    model_names=["llama3.2-1B"]*4,  # same 1 B model on every lane
+    fanout=False,                 # pure split
+)
+```
+
+**At Peak generation:**
+
+```
+    4 workers  ×  6-prompt batch  ⇒  24 prompts generating concurrently
+```
+
+- **VRAM baseline**  
+    One shared copy of Llama 3.2-1B ≈ **2 GB**
+    
+- **Generation activations**  
+    4 workers × 0.5 GB ≈ **2 GB**
+    
+- **Total peak** ≈ **4 GB** (fits easily on an 8 GB card)
+    
+
+CPU load spreads across four decoding threads; HTTP overhead is amortised  
+because each request carries six prompts.
+
+---
+
+Switch to **fan-out** with two different models and preserve batching:
+
+```python
+fill_missing_fields_from_csv(
+    input_csv="events.csv",
+    output_csv="events_filled.csv",
+    chunk_size=40_000,
+    workers=2,
+    batch_size=6,
+    json_fields=("Occasion", "City"),
+    model_names=["llama3.2-1B", "mistral-7B"],  # different tag per worker
+    fanout=True,                                # every model handles every row
+)
+```
+
+- **Models loaded**  
+    1 B (2 GB) + 7 B (≈13 GB) = **15 GB** baseline.
+    
+- **Activations**  
+    2 workers × 0.5 GB = **1 GB** extra during generation.
+    
+- **Outcome**  
+    Each row now gets two result columns per key:  
+    `computed_occasion_llama3.2-1B`, `computed_occasion_mistral-7B`, etc.
+    
+
+If 16 GB VRAM is too tight, you could:
+
+```bash
+export OLLAMA_MAX_LOADED_MODELS=1   # keep only one model resident at a time
+```
+
+and/or drop `batch_size` to 4.
 
 ## Troubleshooting
 
