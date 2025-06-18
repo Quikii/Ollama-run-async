@@ -1,10 +1,10 @@
 
-The code presented makes it possible for researchers in social sciences to run several Large Language Models loaded through ollama at once. This has two reasons: 
+The code presented makes it simple for researchers in social sciences to run several Large Language Models loaded through ollama at once. This has two reasons: 
 
 1. **Split:** You run several models in parallel on many chunks of documents (the same model several times or different models per chunk). The text documents are stored as rows in a dataframe. This speeds up the computing time.
-2. **Fanout:** You run several models in parallel on the same chunks of documents (again the same model several times or different models per chunk). Again, the text documents are stored as rows in a dataframe. This likewise speeds up the computing time, but primarily allows for convenient comparison of different model outputs.
+2. **Fanout:** You run several models in parallel on the same chunks of documents (again, the same model several times or different models per chunk). Again, the text documents are stored as rows in a dataframe. This likewise speeds up the computing time, but primarily allows for convenient comparison of different model outputs.
 
-I present two functions which both can split and fanout over the datfarame, but do so in a slightly different way:
+I present two functions that both can split and fan out over the dataframe, but do so in a slightly different way:
 1. **`run_analysis()`:** Allows you to write one prompt, which is then either splits or fans out over the text in the dataframe. The common tasks would be text labeling or sentiment analysis. The answer to the prompt might be conveniently structured in a json object, with specifiable keys.
 2. `fill_missing_fields_from_csv()`: Instead of writing a prompt, the second function is specifically designed for information extraction from the text. It also allows for an output in a json format. Crucially, it also handles existing metadata information in the dataframe, so the model only extracts information that is not yet present. 
 
@@ -14,11 +14,14 @@ I present two functions which both can split and fanout over the datfarame, but 
 ## Installation & model setup
 
 ```bash
-# 1 · Have Ollama running and pull the models you plan to use
+# 1 · Install the Python package
+pip install Ollama-run-async  
+
+# 2 · Have Ollama running and pull the models you plan to use
 ollama pull llama3.2            # repeat for other model tags if desired
 ollama serve                    # keep this running
 
-# 2 · Python deps
+# 3 · Python deps
 pip install pandas numpy tqdm ollama nest_asyncio
 ````
 
@@ -88,7 +91,7 @@ fill_missing_fields_from_csv(
 ## Quick examples
 
 ```python
-from parallel_llama_df_analysis import run_analysis, fill_missing_fields_from_csv
+from ollama_run_async import run_analysis, fill_missing_fields_from_csv
 import pandas as pd
 
 # 1 · Fan-out sentiment scoring with three models
