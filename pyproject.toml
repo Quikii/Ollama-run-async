@@ -1,7 +1,7 @@
 [project]
 name = "ollama-run-async"
 version = "0.2.3"
-description = "Async Ollama helpers for analysis of documents stored in a data frame."
+description = "Functions to conveniently run several Ollama helpers asynchronously for analysis of documents stored in a data frame."
 readme = "ReadME.md" 
 authors = [{name = "Quido Haškovec"}]
 requires-python = ">=3.9"
