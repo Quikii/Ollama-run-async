@@ -228,7 +228,7 @@ That protects your single-GPU Ollama from overload if you accidentally set
 > For a 24 GB GPU: Llama-3-Instruct-8B can usually handle `batch_size=6` × `workers=4` without OOM.
 
 
-### Example 1: Simple Illustration withou batch_size
+### Example 1: Simple Illustration without batch_size
 
 Suppose you run:
 
