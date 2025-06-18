@@ -106,7 +106,12 @@ async def _worker_plain(
             buf_idx.clear()
 
         # iterate over rows in *this* worker's slice
-        for idx, row in chunk.iterrows():
+        for idx, row in tqdm(
+            chunk.iterrows(),
+            total=len(chunk),
+            leave=False,                 # keeps the bar compact
+            desc=f"worker-{model_name}",
+        ):
             user_text = str(row[text_column])
             prompt = (
                 prompt_template.format(text=user_text)
