@@ -1,5 +1,5 @@
 
-The functions presented in this package make it simple for researchers in social sciences to run several Large Language Models loaded through Ollama over documents stored in a .csv file asynchronously (at once). As such, all models used here have to be downloaded through the Ollama interface (https://ollama.com/). 
+The functions presented in this package make it simple for researchers in social sciences to run several Large Language Models loaded through Ollama over documents stored a data frame asynchronously (at once). As such, all models used here have to be downloaded through the Ollama interface (https://ollama.com/). 
 
 The functions can do two main things:
 
