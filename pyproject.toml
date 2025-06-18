@@ -1,6 +1,6 @@
 [project]
 name = "ollama-run-async"
-version = "0.2.1"
+version = "0.2.2"
 description = "Async Ollama helpers for analysis of documents stored in a datafrae."
 authors = [{name = "Quido Haškovec"}]
 requires-python = ">=3.9"
