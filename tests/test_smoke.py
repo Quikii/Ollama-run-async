@@ -1,3 +1,3 @@
 def test_import():
-    import ollama_run_async.py as pl
+    import async_run_ollama.py as pl
     assert hasattr(pl, "run_analysis")
