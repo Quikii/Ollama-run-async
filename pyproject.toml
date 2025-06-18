@@ -1,7 +1,8 @@
 [project]
 name = "ollama-run-async"
-version = "0.2.2"
-description = "Async Ollama helpers for analysis of documents stored in a datafrae."
+version = "0.2.3"
+description = "Async Ollama helpers for analysis of documents stored in a data frame."
+readme = "ReadME.md" 
 authors = [{name = "Quido Haškovec"}]
 requires-python = ">=3.9"
 dependencies = ["pandas", "numpy", "tqdm", "ollama", "nest_asyncio"]
