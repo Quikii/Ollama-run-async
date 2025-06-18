@@ -1,3 +1,3 @@
 def test_import():
-    import parallel_llama_df_analysis_v2 as pl
+    import async_run_ollama.py as pl
     assert hasattr(pl, "run_analysis")
