@@ -1,0 +1,7 @@
+[project]
+name = "parallel-llama-df-analysis"
+version = "0.0.1"
+description = "Async helpers for Ollama text analysis"
+authors = [{name = "Your Name"}]
+requires-python = ">=3.9"
+dependencies = ["pandas", "numpy", "tqdm", "ollama", "nest_asyncio"]
