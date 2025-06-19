@@ -128,6 +128,122 @@ fill_missing_fields_from_csv(
     fanout=True,
 )
 ```
+Here’s a suggested “Section 3” you can append to your README—styled just like the others:
+
+---
+
+### 3 · Survey‐Agent Simulation
+
+```python
+def generate_fake_survey_df(
+    n: int,
+    *,
+    seed: Optional[int] = None,
+    characteristics: Dict[str, SpecType],
+    fixed_values: Optional[Dict[str, Any]] = None
+) -> pd.DataFrame
+```
+
+| Parameter         | Default | Purpose                                                                                                                                                                                          |
+| ----------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `n`               | —       | Number of synthetic survey takers (rows).                                                                                                                                                        |
+| `seed`            | `None`  | Optional `random.seed(…)` for reproducibility.                                                                                                                                                   |
+| `characteristics` | —       | Mapping column name → spec. Spec may be:<br>• `list[…], dict{value:weight}` or `callable()` for **unconditional** draws<br>• `{"depends_on":col, "distributions":{…}}` for **conditional** draws |
+| `fixed_values`    | `None`  | Mapping col → single value to assign to every row.                                                                                                                                               |
+
+Returns a `DataFrame` with `ID` plus each characteristic (and any fixed columns).
+
+```python
+run_survey_responses(
+    df: pd.DataFrame,
+    questions: Dict[str, Optional[List[str]]],
+    workers: int = 3,
+    chunk_size: Optional[int] = None,
+    batch_size: int = 4,
+    max_concurrent_calls: Optional[int] = None,
+    max_tokens: int = 256,
+    *,                       # keyword-only extras
+    model_names: str | list[str] = "llama3.2",
+    temperature: float = 0.9,
+) -> pd.DataFrame
+```
+
+| Parameter              | Default      | Purpose                                                                                        |
+| ---------------------- | ------------ | ---------------------------------------------------------------------------------------------- |
+| `df`, `questions`      | —            | Input respondents and survey items mapping question → options (list) or `None` (open).         |
+| `workers`              | 3            | Number of parallel `AsyncClient` workers (row‐level sharding).                                 |
+| `max_concurrent_calls` | `None`       | Caps the simultaneous in-flight LLM calls (defaults to `workers`).                                 |
+| `model_names`          | `"llama3.2"` | Single model or list of length `workers` (one per client).                                     |
+| `batch_size`           | 4            | Prompts queued per worker before awaiting; larger → fewer HTTP round-trips but more VRAM used. |
+| `chunk_size`           | `None`       | Outer chunk size for streaming the DataFrame; `None` → one big batch.                          |
+| `max_tokens`           | 256          | Maximum tokens to generate per question.                                                       |
+| `temperature`          | 0.9          | LLM sampling temperature.                                                                      |
+
+---
+
+## Quick Examples
+
+```python
+from async_run_ollama import (
+    generate_fake_survey_df,
+    run_survey_responses
+)
+import pandas as pd
+
+# 1 · Build 200 fake respondents with conditional age by gender
+characteristics = {
+    "Gender": {"Man": 0.5, "Woman": 0.45, "Nonbinary": 0.05},
+    "Age_Group": {
+        "depends_on": "Gender",
+        "distributions": {
+            "Man":   {"18-24":0.2, "25-34":0.3, "35-44":0.3, "45+":0.2},
+            "Woman": {"18-24":0.3, "25-34":0.3, "35-44":0.2, "45+":0.2},
+            "Nonbinary": ["18-24","25-34","35-44"]
+        }
+    },
+    "Education": ["High School","College","Graduate"],
+}
+df = generate_fake_survey_df(
+    n=200,
+    seed=42,
+    characteristics=characteristics,
+    fixed_values={"Nationality":"USA"}
+)
+
+# 2 · Define your survey (MC + open)
+questions = {
+    "How satisfied are you with your job?": [
+        "Very satisfied",
+        "Somewhat satisfied",
+        "Neutral",
+        "Somewhat dissatisfied",
+        "Very dissatisfied",
+    ],
+    "What is your preferred work environment?": None,
+    "Which benefit matters most to you?": [
+        "Salary",
+        "Work-life balance",
+        "Career growth",
+        "Health benefits",
+        "Other"
+    ],
+}
+
+# 3 · Simulate across 4 workers, batching, with progress bars
+filled = run_survey_responses(
+    df,
+    questions,
+    workers=4,
+    chunk_size=50,
+    batch_size=8,
+    max_concurrent_calls=10,
+    max_tokens=128,
+    model_names="llama3.2",
+    temperature=0.7
+)
+
+print(filled.head())
+```
 
 ## How parallelisation works in the code
 
