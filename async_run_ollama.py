@@ -83,33 +83,28 @@ async def _worker_plain(
     prompt_template: str | None,
     json_keys: tuple[str, ...] | None,
     fanout: bool,
-    batch_size: int,                    # NEW PARAM
+    batch_size: int,
+    temperature: float,
+    max_tokens: int,
 ) -> None:
-    """Process one DataFrame slice on a dedicated AsyncClient.
-
-    Queues up to `batch_size` prompts before awaiting the model response,
-    mirroring the batching logic used in the CSV helper.
-    """
     client = AsyncClient()
     try:
         buf_tasks: list[asyncio.Task] = []
-        buf_idx:   list[int]          = []
+        buf_idx:   list[int] = []
 
         async def _flush() -> None:
-            """Await queued tasks and write replies into `out`."""
             for ridx, reply in zip(buf_idx, await asyncio.gather(*buf_tasks)):
                 if fanout:
-                    out[ridx][model_name] = reply          # type: ignore[index]
+                    out[ridx][model_name] = reply
                 else:
-                    out[ridx] = reply                      # type: ignore[index]
+                    out[ridx] = reply
             buf_tasks.clear()
             buf_idx.clear()
 
-        # iterate over rows in *this* worker's slice
         for idx, row in tqdm(
             chunk.iterrows(),
             total=len(chunk),
-            leave=False,                 # keeps the bar compact
+            leave=False,
             desc=f"worker-{model_name}",
         ):
             user_text = str(row[text_column])
@@ -119,7 +114,6 @@ async def _worker_plain(
                 user_text
             )
 
-            # build messages
             if json_keys:
                 messages = [
                     {"role": "system", "content": _json_system_prompt(json_keys)},
@@ -128,24 +122,27 @@ async def _worker_plain(
             else:
                 messages = [{"role": "user", "content": prompt}]
 
-            # create the task under semaphore protection
             async with semaphore:
                 task = asyncio.create_task(
-                    _chat_single(client, messages, model_name=model_name)
+                    _chat_single(
+                        client,
+                        messages,
+                        model_name=model_name,
+                        num_predict=max_tokens,
+                        temperature=temperature,
+                    )
                 )
             buf_tasks.append(task)
             buf_idx.append(idx)
 
-            # flush when batch is full
             if len(buf_tasks) == batch_size:
                 await _flush()
 
-        # flush remaining prompts
         if buf_tasks:
             await _flush()
-
     finally:
         await _maybe_aclose(client)
+
 
 async def analyze_dataframe(
     df: pd.DataFrame,
@@ -159,25 +156,24 @@ async def analyze_dataframe(
     prompt_template: str | None = None,
     json_keys: tuple[str, ...] | None = None,
     fanout: bool = False,
+    temperature: float = 0.9,
+    max_tokens: int = MAX_TOKENS,
 ) -> pd.DataFrame:
     if text_column not in df.columns:
         raise ValueError(f"{text_column!r} not found")
-
     if isinstance(model_names, str):
         model_names = [model_names] * workers
     if len(model_names) != workers:
         raise ValueError("len(model_names) must equal workers")
 
     sem = aSYNC_SEM(max_concurrent_calls or workers)
-    
-    # buffer stays the same, but declare it *before* the loop
     buf: List[dict[str,str] | str | None] = [ {} if fanout else None for _ in range(len(df)) ]
-    
+
     outer_steps = range(0, len(df), chunk_size or len(df))
     for start in tqdm(outer_steps, desc="DF chunks"):
         sub_df = df.iloc[start : start + (chunk_size or len(df))]
         sub_chunks = np.array_split(sub_df, workers)
-    
+
         await asyncio.gather(*[
             _worker_plain(
                 sub_chunk,
@@ -189,14 +185,14 @@ async def analyze_dataframe(
                 json_keys=json_keys,
                 fanout=fanout,
                 batch_size=batch_size,
+                temperature=temperature,
+                max_tokens=max_tokens,
             )
             for i, sub_chunk in enumerate(sub_chunks)
         ])
 
     result = df.copy()
-
     if fanout:
-        # create columns per model (+ per key)
         for mdl in set(model_names):
             if json_keys:
                 for k in json_keys:
@@ -204,7 +200,7 @@ async def analyze_dataframe(
             else:
                 result[f"analysis_{mdl}"] = None
 
-        for i, per_row in enumerate(buf):           # type: ignore[assignment]
+        for i, per_row in enumerate(buf):
             assert isinstance(per_row, dict)
             for mdl, raw in per_row.items():
                 if json_keys:
@@ -222,9 +218,10 @@ async def analyze_dataframe(
                 for k in json_keys:
                     result.at[i, k] = parsed.get(k)
         else:
-            result["analysis"] = buf                # type: ignore[arg-type]
+            result["analysis"] = buf
 
     return result
+
 
 def run_analysis(
     df: pd.DataFrame,
@@ -238,26 +235,28 @@ def run_analysis(
     prompt_template: str | None = None,
     json_keys: tuple[str, ...] | None = None,
     fanout: bool = False,
+    temperature: float = 0.9,
+    max_tokens: int = MAX_TOKENS,
 ) -> pd.DataFrame:
-    loop = None
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
-        pass
+        loop = None
 
     coro = analyze_dataframe(
         df=df,
         text_column=text_column,
         workers=workers,
-        chunk_size=chunk_size,                 # ← explicit
-        batch_size=batch_size,                 # ← explicit
-        max_concurrent_calls=max_concurrent_calls,   # ← explicit
+        chunk_size=chunk_size,
+        batch_size=batch_size,
+        max_concurrent_calls=max_concurrent_calls,
         model_names=model_names,
         prompt_template=prompt_template,
         json_keys=json_keys,
         fanout=fanout,
+        temperature=temperature,
+        max_tokens=max_tokens,
     )
-
     if loop and loop.is_running():
         import nest_asyncio; nest_asyncio.apply()
         return loop.run_until_complete(coro)
@@ -285,17 +284,21 @@ async def _infer_json(
     json_fields: tuple[str, ...],
     *,
     model_name: str,
-) -> Dict:
+    num_predict: int = MAX_TOKENS,
+    temperature: float = 0.9,
+) -> Dict[str, str | None]:
     keys = ",".join(f'"{k}": string|null' for k in json_fields)
     system = (
         "You are a JSON-only API. Respond with exactly one JSON object "
         f"{{{keys}}}. If unsure write \"Unclear\"."
     )
     user = f'Title: "{title}"\nReturn only the missing keys: {", ".join(missing)}.'
-    raw  = await _chat_single(
+    raw = await _chat_single(
         client,
         [{"role": "system", "content": system}, {"role": "user", "content": user}],
         model_name=model_name,
+        num_predict=num_predict,
+        temperature=temperature,
     )
     return _to_json(raw, json_fields)
 
@@ -309,6 +312,8 @@ async def _process_subchunk(
     col_map: dict[str, str],
     model_name: str,
     fanout: bool,
+    temperature: float,
+    max_tokens: int,
 ) -> int:
     client, filled = AsyncClient(), 0
     try:
@@ -317,22 +322,34 @@ async def _process_subchunk(
             known = {k: row.get(k.lower(), pd.NA) for k in json_fields}
             if "City" in json_fields and pd.isna(known.get("City")):
                 known["City"] = row.get("location", pd.NA)
-            missing = [k for k,v in known.items() if pd.isna(v)]
+            missing = [k for k, v in known.items() if pd.isna(v)]
 
-            for k,v in known.items():
+            for k, v in known.items():
                 if _keep(v):
-                    sub.at[idx, col_map[k]] = v if not fanout else f"{v}"
+                    target = f"{col_map[k]}_{model_name}" if fanout else col_map[k]
+                    sub.at[idx, target] = v
                     filled += 1
 
-            if not missing: continue
+            if not missing:
+                continue
 
             async with semaphore:
-                t = asyncio.create_task(
-                        _infer_json(client, row[title_col], missing, json_fields,
-                                    model_name=model_name))
-            buf_tasks.append(t); buf_idx.append(idx)
+                buf_tasks.append(
+                    asyncio.create_task(
+                        _infer_json(
+                            client,
+                            row[title_col],
+                            missing,
+                            json_fields,
+                            model_name=model_name,
+                            num_predict=max_tokens,
+                            temperature=temperature,
+                        )
+                    )
+                )
+                buf_idx.append(idx)
 
-            if len(buf_tasks)==batch_size:
+            if len(buf_tasks) == batch_size:
                 filled += await _flush(buf_tasks, buf_idx, sub, col_map, fanout, model_name)
 
         if buf_tasks:
@@ -341,68 +358,96 @@ async def _process_subchunk(
         await _maybe_aclose(client)
     return filled
 
-async def _flush(tasks, idxs, chunk, col_map, fanout, model_name)->int:
-    filled=0
-    for ridx, parsed in zip(idxs, await asyncio.gather(*tasks)):
-        for k,col in col_map.items():
-            target = f"{col}_{model_name}" if fanout else col
-            if _keep(parsed.get(k)):
-                chunk.at[ridx, target] = parsed[k]; filled+=1
-    tasks.clear(); idxs.clear(); return filled
 
 async def _process_csv_async(
-    input_csv:str, output_csv:str, *, chunk_size:int, workers:int,
-    batch_size:int, title_col:str, json_fields:tuple[str,...],
-    col_map:dict[str,str], model_names:List[str]|str, fanout:bool,
+    input_csv: str,
+    output_csv: str,
+    *,
+    chunk_size: int,
+    workers: int,
+    batch_size: int,
+    title_col: str,
+    json_fields: tuple[str, ...],
+    col_map: dict[str, str],
+    model_names: List[str] | str,
+    fanout: bool,
+    temperature: float,
+    max_tokens: int,
 ):
-    if isinstance(model_names,str):
-        model_names=[model_names]*workers
-    if len(model_names)!=workers:
+    if isinstance(model_names, str):
+        model_names = [model_names] * workers
+    if len(model_names) != workers:
         raise ValueError("len(model_names) must equal workers")
 
-    first=True; semaphore=aSYNC_SEM(workers)
-    itr=pd.read_csv(input_csv,chunksize=chunk_size)
-    for chunk_no,chunk in enumerate(tqdm(itr,desc="CSV chunks"),start=1):
-        # ensure all computed columns exist
-        for key,col in col_map.items():
-            cols=[f"{col}_{m}" for m in model_names] if fanout else [col]
+    first = True
+    semaphore = aSYNC_SEM(workers)
+    itr = pd.read_csv(input_csv, chunksize=chunk_size)
+    for chunk in tqdm(itr, desc="CSV chunks"):
+        for key, col in col_map.items():
+            cols = [f"{col}_{m}" for m in model_names] if fanout else [col]
             for c in cols:
-                if c not in chunk: chunk[c]=pd.NA
+                if c not in chunk:
+                    chunk[c] = pd.NA
 
-        parts=np.array_split(chunk,workers)
-        counts=await asyncio.gather(*[
+        parts = np.array_split(chunk, workers)
+        await asyncio.gather(*[
             _process_subchunk(
-                p,title_col=title_col,batch_size=batch_size,semaphore=semaphore,
-                json_fields=json_fields,col_map=col_map,
-                model_name=model_names[i],fanout=fanout
-            ) for i,p in enumerate(parts)
+                p,
+                title_col=title_col,
+                batch_size=batch_size,
+                semaphore=semaphore,
+                json_fields=json_fields,
+                col_map=col_map,
+                model_name=model_names[i],
+                fanout=fanout,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            for i, p in enumerate(parts)
         ])
-        chunk.to_csv(output_csv,mode="a",header=first,index=False); first=False
-        print(f"✔ chunk {chunk_no} saved — rows: {len(chunk):,}, filled: {sum(counts):,}")
-    print("✅ All chunks processed. Output →",output_csv)
+
+        chunk.to_csv(output_csv, mode="a", header=first, index=False)
+        first = False
+
 
 def fill_missing_fields_from_csv(
-    *, input_csv:str, output_csv:str="out.csv", chunk_size:int=20_000,
-    workers:int=3, batch_size:int=4, title_col:str="title_en",
-    json_fields:tuple[str,...]=_JSON_FIELDS_DEFAULT,
-    col_map:dict[str,str]=_COL_MAP_DEFAULT,
-    model_names:List[str]|str=MODEL_NAME, fanout:bool=False,
-):
-    loop=None
-    try: loop=asyncio.get_running_loop()
-    except RuntimeError: pass
+    *,
+    input_csv: str,
+    output_csv: str = "out.csv",
+    chunk_size: int = 20_000,
+    workers: int = 3,
+    batch_size: int = 4,
+    title_col: str = "title_en",
+    json_fields: tuple[str, ...] = _JSON_FIELDS_DEFAULT,
+    col_map: dict[str, str] = _COL_MAP_DEFAULT,
+    model_names: List[str] | str = MODEL_NAME,
+    fanout: bool = False,
+    temperature: float = 0.9,
+    max_tokens: int = MAX_TOKENS,
+) -> None:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
 
-    coro=_process_csv_async(
-        input_csv,output_csv,chunk_size=chunk_size,workers=workers,
-        batch_size=batch_size,title_col=title_col,
-        json_fields=json_fields,col_map=col_map,
-        model_names=model_names,fanout=fanout,
+    coro = _process_csv_async(
+        input_csv,
+        output_csv,
+        chunk_size=chunk_size,
+        workers=workers,
+        batch_size=batch_size,
+        title_col=title_col,
+        json_fields=json_fields,
+        col_map=col_map,
+        model_names=model_names,
+        fanout=fanout,
+        temperature=temperature,
+        max_tokens=max_tokens,
     )
     if loop and loop.is_running():
         import nest_asyncio; nest_asyncio.apply()
         return loop.run_until_complete(coro)
     return asyncio.run(coro)
-
 # ---------------------------------------------------------------------------
 # Part 3 – Create Fake Survey Responses 
 # ---------------------------------------------------------------------------
