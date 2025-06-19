@@ -6,13 +6,13 @@ Asynchronous helpers for Ollama models**
 """
 
 from __future__ import annotations
-
+import random
 import argparse
 import asyncio
 import json
 import sys
 import textwrap
-from typing import Dict, List
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import numpy as np
 from tqdm.auto import tqdm
