@@ -503,6 +503,10 @@ def generate_fake_survey_df(
 # Initialization of Survey Workers (simulate_survey_responses())
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Survey Worker
+# ---------------------------------------------------------------------------
+
 async def _worker_survey(
     worker_id: int,
     chunk: pd.DataFrame,
@@ -517,10 +521,10 @@ async def _worker_survey(
 ) -> None:
     client = AsyncClient()
     try:
-        buf_tasks = []
-        buf_meta  = []
+        buf_tasks: List[asyncio.Task] = []
+        buf_meta:  List[tuple[int, str]] = []
 
-        # create & latch the bar outside the loop
+        # progress bar for this worker
         bar = tqdm(
             total=len(chunk),
             desc=f"worker-{worker_id}-{model_name}",
@@ -536,29 +540,28 @@ async def _worker_survey(
             buf_tasks.clear()
             buf_meta.clear()
 
-        # iterate rows without wrapping in tqdm
         for idx, row in chunk.iterrows():
-            # --- build prompts/messages for this respondent once ---
+            # build system prompt with characteristics
             char_parts = [f"{col}={row[col]}" for col in row.index]
-            system_prompt = (
+            base_prompt = (
                 "You are a fake survey taker with these characteristics: "
                 + "; ".join(char_parts)
-                + ".\nAnswer the following:"
             )
 
-            # schedule one chat-call per question
             for question, options in questions.items():
-                if options:
+                # build question prompt
+                if options is not None:
                     opts_str = ", ".join(options)
-                    user_msg = f"{question}\nChoose one of: {opts_str}"
+                    user_msg = f"{question}\nOptions: {opts_str}\nRespond to each question by outputting ONLY the chosen option (no extra text)."
                 else:
                     user_msg = question
 
                 messages = [
-                    {"role": "system", "content": system_prompt},
+                    {"role": "system", "content": base_prompt},
                     {"role": "user",   "content": user_msg},
                 ]
 
+                # schedule chat for both open and choice
                 async with semaphore:
                     buf_tasks.append(
                         asyncio.create_task(
@@ -573,22 +576,21 @@ async def _worker_survey(
                     )
                     buf_meta.append((idx, question))
 
-                # flush in batches
                 if len(buf_tasks) >= batch_size:
                     await _flush()
 
-            # update the bar once per respondent row
             bar.update(1)
 
-        # flush any remaining
         if buf_tasks:
             await _flush()
-
         bar.close()
 
     finally:
         await _maybe_aclose(client)
 
+# ---------------------------------------------------------------------------
+# Simulation Functions
+# ---------------------------------------------------------------------------
 
 async def simulate_survey_responses(
     df: pd.DataFrame,
@@ -610,7 +612,6 @@ async def simulate_survey_responses(
     sem = asyncio.Semaphore(max_concurrent_calls or workers)
     buf: List[Dict[str, str]] = [{q: "" for q in questions} for _ in range(len(df))]
 
-    # outer progress bar at position 0
     for start in tqdm(
         range(0, len(df), chunk_size or len(df)),
         desc="DF chunks",
@@ -619,7 +620,6 @@ async def simulate_survey_responses(
     ):
         sub = df.iloc[start : start + (chunk_size or len(df))]
         subs = np.array_split(sub, workers)
-
         await asyncio.gather(*[
             _worker_survey(
                 i,
@@ -669,7 +669,6 @@ def run_survey_responses(
         model_names=model_names,
         temperature=temperature,
     )
-
     if loop and loop.is_running():
         import nest_asyncio
         nest_asyncio.apply()
