@@ -404,6 +404,278 @@ def fill_missing_fields_from_csv(
     return asyncio.run(coro)
 
 # ---------------------------------------------------------------------------
+# Part 3 – Create Fake Survey Responses 
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Create the Fake Survey Takers (generate_fake_survey_df())
+# ---------------------------------------------------------------------------
+SpecType = Union[
+    List[Any],                    # uniform list
+    Dict[Any, float],             # weighted dict
+    Callable[[], Any],            # custom function
+    Dict[str, Any]                # conditional spec: {'depends_on': str, 'distributions': {...}}
+]
+
+def generate_fake_survey_df(
+    n: int,
+    *,
+    seed: Optional[int] = None,
+    characteristics: Dict[str, SpecType],
+    fixed_values: Optional[Dict[str, Any]] = None
+) -> pd.DataFrame:
+    """
+    Generate a DataFrame of fake survey takers with support for conditional distributions.
+
+    Parameters:
+    - n: Number of rows (fake respondents).
+    - seed: Optional random seed.
+    - characteristics: mapping col name -> spec, where spec is:
+        • list of values (uniform)
+        • dict value->weight (weighted)
+        • callable() -> value
+        • conditional dict:
+            {
+              "depends_on": "<other_column>",
+              "distributions": {
+                <parent_value>: <spec (list/dict/callable)>,
+                ...
+              }
+            }
+    - fixed_values: mapping col name -> single fixed value
+
+    Returns:
+    - pd.DataFrame with columns: ID, each characteristic, plus any fixed columns.
+    """
+    if seed is not None:
+        random.seed(seed)
+
+    # split unconditional vs conditional
+    unconditional: Dict[str, SpecType] = {}
+    conditional: Dict[str, Dict[str, Any]] = {}
+    for col, spec in characteristics.items():
+        if isinstance(spec, dict) and "depends_on" in spec and "distributions" in spec:
+            conditional[col] = spec  # type: ignore
+        else:
+            unconditional[col] = spec
+
+    def _draw_from_spec(spec: SpecType, k: int) -> List[Any]:
+        """Helper: draw k samples from a spec."""
+        if isinstance(spec, dict) and not ("depends_on" in spec and "distributions" in spec):
+            # weighted dict
+            choices, weights = zip(*spec.items())  # type: ignore
+            return random.choices(choices, weights=weights, k=k)
+        elif isinstance(spec, list):
+            return random.choices(spec, k=k)
+        elif callable(spec):
+            return [spec() for _ in range(k)]
+        else:
+            raise ValueError(f"Invalid spec: {spec}")
+
+    # build data container
+    data: Dict[str, List[Any]] = {"ID": list(range(1, n + 1))}
+
+    # generate all unconditional columns
+    for col, spec in unconditional.items():
+        data[col] = _draw_from_spec(spec, n)
+
+    # now generate conditional columns
+    for col, cond in conditional.items():
+        parent = cond["depends_on"]
+        dists: Dict[Any, SpecType] = cond["distributions"]
+        vals: List[Any] = []
+        for i in range(n):
+            parent_val = data[parent][i]
+            if parent_val not in dists:
+                raise KeyError(f"No distribution for parent value '{parent_val}' in column '{col}'")
+            spec_for_parent = dists[parent_val]
+            # draw one sample from that spec
+            single = _draw_from_spec(spec_for_parent, 1)[0]
+            vals.append(single)
+        data[col] = vals
+
+    # add fixed columns
+    if fixed_values:
+        for col, val in fixed_values.items():
+            data[col] = [val] * n
+
+    return pd.DataFrame(data)
+# ---------------------------------------------------------------------------
+# Initialization of Survey Workers (simulate_survey_responses())
+# ---------------------------------------------------------------------------
+
+async def _worker_survey(
+    worker_id: int,
+    chunk: pd.DataFrame,
+    *,
+    questions: Dict[str, Optional[List[str]]],
+    out: List[Dict[str, str]],
+    semaphore: asyncio.Semaphore,
+    model_name: str,
+    temperature: float,
+    batch_size: int,
+    max_tokens: int,
+) -> None:
+    client = AsyncClient()
+    try:
+        buf_tasks = []
+        buf_meta  = []
+
+        # create & latch the bar outside the loop
+        bar = tqdm(
+            total=len(chunk),
+            desc=f"worker-{worker_id}-{model_name}",
+            position=worker_id+1,
+            leave=True,
+            dynamic_ncols=True
+        )
+
+        async def _flush():
+            replies = await asyncio.gather(*buf_tasks)
+            for (ridx, q), reply in zip(buf_meta, replies):
+                out[ridx][q] = reply
+            buf_tasks.clear()
+            buf_meta.clear()
+
+        # iterate rows without wrapping in tqdm
+        for idx, row in chunk.iterrows():
+            # --- build prompts/messages for this respondent once ---
+            char_parts = [f"{col}={row[col]}" for col in row.index]
+            system_prompt = (
+                "You are a fake survey taker with these characteristics: "
+                + "; ".join(char_parts)
+                + ".\nAnswer the following:"
+            )
+
+            # schedule one chat-call per question
+            for question, options in questions.items():
+                if options:
+                    opts_str = ", ".join(options)
+                    user_msg = f"{question}\nChoose one of: {opts_str}"
+                else:
+                    user_msg = question
+
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",   "content": user_msg},
+                ]
+
+                async with semaphore:
+                    buf_tasks.append(
+                        asyncio.create_task(
+                            _chat_single(
+                                client,
+                                messages,
+                                model_name=model_name,
+                                num_predict=max_tokens,
+                                temperature=temperature,
+                            )
+                        )
+                    )
+                    buf_meta.append((idx, question))
+
+                # flush in batches
+                if len(buf_tasks) >= batch_size:
+                    await _flush()
+
+            # update the bar once per respondent row
+            bar.update(1)
+
+        # flush any remaining
+        if buf_tasks:
+            await _flush()
+
+        bar.close()
+
+    finally:
+        await _maybe_aclose(client)
+
+
+async def simulate_survey_responses(
+    df: pd.DataFrame,
+    questions: Dict[str, Optional[List[str]]],
+    workers: int = 3,
+    chunk_size: Optional[int] = None,
+    batch_size: int = 4,
+    max_concurrent_calls: Optional[int] = None,
+    max_tokens: int = 256,
+    *,
+    model_names: Union[List[str], str] = MODEL_NAME,
+    temperature: float = 0.9,
+) -> pd.DataFrame:
+    if isinstance(model_names, str):
+        model_names = [model_names] * workers
+    if len(model_names) != workers:
+        raise ValueError("len(model_names) must equal workers")
+
+    sem = asyncio.Semaphore(max_concurrent_calls or workers)
+    buf: List[Dict[str, str]] = [{q: "" for q in questions} for _ in range(len(df))]
+
+    # outer progress bar at position 0
+    for start in tqdm(
+        range(0, len(df), chunk_size or len(df)),
+        desc="DF chunks",
+        position=0,
+        leave=True
+    ):
+        sub = df.iloc[start : start + (chunk_size or len(df))]
+        subs = np.array_split(sub, workers)
+
+        await asyncio.gather(*[
+            _worker_survey(
+                i,
+                subs[i],
+                questions=questions,
+                out=buf,
+                semaphore=sem,
+                model_name=model_names[i],
+                temperature=temperature,
+                batch_size=batch_size,
+                max_tokens=max_tokens,
+            )
+            for i in range(workers)
+        ])
+
+    result = df.copy()
+    for q in questions:
+        result[q] = [rowbuf[q] for rowbuf in buf]
+    return result
+
+
+def run_survey_responses(
+    df: pd.DataFrame,
+    questions: Dict[str, Optional[List[str]]],
+    workers: int = 3,
+    chunk_size: Optional[int] = None,
+    batch_size: int = 4,
+    max_concurrent_calls: Optional[int] = None,
+    max_tokens: int = 256,
+    *,
+    model_names: Union[List[str], str] = MODEL_NAME,
+    temperature: float = 0.9,
+) -> pd.DataFrame:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    coro = simulate_survey_responses(
+        df,
+        questions,
+        workers=workers,
+        chunk_size=chunk_size,
+        batch_size=batch_size,
+        max_concurrent_calls=max_concurrent_calls,
+        max_tokens=max_tokens,
+        model_names=model_names,
+        temperature=temperature,
+    )
+
+    if loop and loop.is_running():
+        import nest_asyncio
+        nest_asyncio.apply()
+        return loop.run_until_complete(coro)
+    return asyncio.run(coro)
+# ---------------------------------------------------------------------------
 # CLI entry‑point (python parallel_llama_df_analysis.py <input.csv> ...)
 # ---------------------------------------------------------------------------
 
