@@ -1,12 +1,16 @@
 
-The functions presented in this package make it simple for researchers in social sciences to run several Large Language Models loaded through Ollama over documents stored in a data frame asynchronously (at once). As such, all models used here have to be downloaded through the Ollama interface (https://ollama.com/). 
+The functions presented in this package make it simple for researchers in social sciences to run several Large Language Models loaded through Ollama over documents stored in a data frame asynchronously (at once). As such, all models used here have to be downloaded through the Ollama interface (https://ollama.com/). With them you can:
+
+1. **Analyze** Text Stored in a Dataframe Column
+2. **Extract** Missing Metadata Information from a Text Stored in a Dataframe Column
+3. **Create** "Fake" LLM Survey Respondents with given characteristics and make them answer your survey questions 
 
 The functions can do two main things:
 
 1. **Split:** You run several models in parallel on many chunks of documents (the same model several times or different models per chunk). The text documents are stored as rows in a dataframe. This speeds up the computing time.
 2. **Fanout:** You run several models in parallel on the same chunks of documents (again, the same model several times or different models per chunk). Again, the text documents are stored as rows in a dataframe. This likewise speeds up the computing time, but primarily allows for convenient comparison of different model outputs.
 
-I present three functions that both can split and fan out over the dataframe, but do so in a slightly different way:
+The three functions of the package that can either split and/or fan out over the dataframe, but do so in slightly different ways and for slightly different purposes:
 1. **`run_analysis()`:** Allows you to write one prompt, which then either splits or fans out over the text in the dataframe. The common tasks would be text labeling or sentiment analysis. The answer to the prompt might be conveniently structured in a JSON object, with specifiable keys.
 2. **`fill_missing_fields_from_csv()`**: Instead of writing a prompt, the second function is specifically designed for information extraction from the text (with the primary use case being metadata collection). It also allows for an output in a JSON format. Crucially, it also handles existing metadata information in the dataframe, so the model only extracts information that is not yet present. 
 3. **`run_survey_responses()`**: The last function, instead of focusing on analysing existing text, creates fake survey responses based on a set of characteristics. The "fake" respondents are generated and stored in a data frame with the helper function `generate_fake_survey_df()`, which allows the creation of a representative (based on the target population) distribution of characteristics over these respondents. The use case is to have a potentially more accurate distribution of responses to survey questions prior to running the actual survey on real-life respondents. 
@@ -44,12 +48,14 @@ run_analysis(
     workers: int = 3,
     max_concurrent_calls: int | None = None,
     *,                       # keyword-only extras
+    chunk_size: int | None = None,
+    batch_size: int = 4,
     model_names: str | list[str] = "llama3.2",
     prompt_template: str | None = None,
     json_keys: tuple[str, ...] | None = None,
-    batch_size: int = 4,
-    chunk_size: int | None = None,      
     fanout: bool = False,
+    temperature: float = 0.9,
+    max_tokens: int = 128,
 ) -> pd.DataFrame
 ```
 
@@ -63,6 +69,8 @@ run_analysis(
 | `batch_size`        | 4            | **Prompts queued per worker before awaiting** the model response. Larger = fewer HTTP round-trips & better GPU utilisation, but more VRAM during generation. |
 | `chunk_size`        | `None`       | Stream the DataFrame in outer chunks of this many rows (keeps RAM bounded). `None` → process the whole frame in one pass.                                    |
 | `fanout`            | `False`      | `False` → models split the DataFrame. `True` → **every model analyses every row**; output columns are suffixed with `_<model>` (e.g. `label_llama3.2`).      |
+| `temperature`       | 0.9          | Sampling temperature for the LLM (higher → more random).                                                                                                     |
+| `max_tokens`        | 128          | Maximum number of tokens to generate per row/question.                                                                                                       |
 
 ---
 
@@ -80,6 +88,8 @@ fill_missing_fields_from_csv(
     col_map: dict[str, str] | None = None,
     model_names: str | list[str] = "llama3.2",
     fanout: bool = False,
+    temperature: float = 0.9,
+    max_tokens: int = 128,
 ) -> None
 ```
 
@@ -87,11 +97,13 @@ fill_missing_fields_from_csv(
 | ------------- | ------------ | -------------------------------------------------------------------------------------------- |
 | `chunk_size`  | 20 000       | Rows per streamed chunk.                                                                     |
 | `workers`     | 3            | Async workers per chunk.                                                                     |
-| `batch_size`  | 4            | Prompts queued _per_ worker before awaiting.                                                 |
+| `batch_size`  | 4            | Prompts queued *per* worker before awaiting.                                                 |
 | `json_fields` | tuple        | Keys expected in JSON answer.                                                                |
 | `col_map`     | auto         | Key → column map; omit for `computed_<key>`.                                                 |
 | `model_names` | `"llama3.2"` | Tag for all workers **or** list (one per worker).                                            |
 | `fanout`      | `False`      | If `True`, every model fills every row and computed columns become `computed_<key>_<model>`. |
+| `temperature` | 0.9          | Sampling temperature for the LLM (higher → more random).                                     |
+| `max_tokens`  | 128          | Maximum number of tokens to generate per row/record.                                         |
 
 ---
 
@@ -101,23 +113,30 @@ fill_missing_fields_from_csv(
 from async_run_ollama import run_analysis, fill_missing_fields_from_csv
 import pandas as pd
 
-# 1 · Fan-out sentiment scoring with three models
+# 1 · Fan-out sentiment scoring with three models, custom temperature + token limit
 df = pd.read_csv("speeches.csv")
 df = run_analysis(
     df,
     text_column="speech",
     workers=3,
     model_names=["llama3.2", "mistral", "phi3.5"],
-    prompt_template="Return JSON {\"label\":string,\"prob\":float} for {text}",
+    prompt_template='Return JSON {"label":string,"prob":float} for {text}',
     json_keys=("label", "prob"),
     fanout=True,
+    temperature=0.7,    # more deterministic
+    max_tokens=50,      # brief responses
 )
 # adds label_llama3.2, prob_llama3.2, label_mistral, …
 
-# 2 · Classic workload split (no fan-out)
-scores = run_analysis(df, prompt_template="Summarise: {text}")
+# 2 · Classic workload split (no fan-out), higher temperature
+scores = run_analysis(
+    df,
+    prompt_template="Summarise: {text}",
+    temperature=1.0,
+    max_tokens=100
+)
 
-# 3 · CSV enrichment with fan-out
+# 3 · CSV enrichment with fan-out, custom token limit
 fill_missing_fields_from_csv(
     input_csv="events.csv",
     output_csv="events_filled.csv",
@@ -126,11 +145,11 @@ fill_missing_fields_from_csv(
     workers=2,
     model_names=["llama3.2","mistral"],
     fanout=True,
+    temperature=0.8,
+    max_tokens=60
 )
 ```
-Here’s a suggested “Section 3” you can append to your README—styled just like the others:
 
----
 
 ### 3 · Survey‐Agent Simulation
 
