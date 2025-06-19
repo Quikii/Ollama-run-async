@@ -190,7 +190,7 @@ from async_run_ollama import (
 )
 import pandas as pd
 
-# 1 · Build 200 fake respondents with conditional age by gender
+# 1a · Build 200 fake respondents with conditional age by gender and unconditional education
 characteristics = {
     "Gender": {"Man": 0.5, "Woman": 0.45, "Nonbinary": 0.05},
     "Age_Group": {
@@ -201,13 +201,19 @@ characteristics = {
             "Nonbinary": ["18-24","25-34","35-44"]
         }
     },
-    "Education": ["High School","College","Graduate"],
+    "Education": ["High School","College","Graduate"], #will be split evenly
+}
+# 1b. Purely Unconditional 
+characteristics = {
+    "Gender": {"Man": 0.5, "Woman": 0.45, "Nonbinary": 0.05},
+    "Age_Group": ["18-24", "25-34", "35-44", "45-54", "55+"],
+    "Education": {"High School": 0.3, "Graduate": 0.5, "MA": 0.2},
 }
 df = generate_fake_survey_df(
     n=200,
     seed=42,
     characteristics=characteristics,
-    fixed_values={"Nationality":"USA"}
+    fixed_values={"Nationality":"Palestine"}
 )
 
 # 2 · Define your survey (MC + open)
