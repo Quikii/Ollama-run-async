@@ -1,5 +1,5 @@
 
-The functions presented in this package make it simple for researchers in social sciences to run several Large Language Models loaded through Ollama over documents stored in a data frame asynchronously (at once). As such, all models used here have to be downloaded through the Ollama interface (https://ollama.com/). With them you can:
+The functions presented in this package make it simple for researchers in social sciences to run several Large Language Models loaded through Ollama over documents stored in a data frame asynchronously (at once). As such, all models used here have to be downloaded through the Ollama interface (https://ollama.com/). With them you are able to:
 
 1. **Analyze** Text Stored in a Dataframe Column
 2. **Extract** Missing Metadata Information from a Text Stored in a Dataframe Column
