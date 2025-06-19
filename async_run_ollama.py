@@ -302,6 +302,15 @@ async def _infer_json(
     )
     return _to_json(raw, json_fields)
 
+async def _flush(tasks, idxs, chunk, col_map, fanout, model_name)->int:
+    filled=0
+    for ridx, parsed in zip(idxs, await asyncio.gather(*tasks)):
+        for k,col in col_map.items():
+            target = f"{col}_{model_name}" if fanout else col
+            if _keep(parsed.get(k)):
+                chunk.at[ridx, target] = parsed[k]; filled+=1
+    tasks.clear(); idxs.clear(); return filled
+
 async def _process_subchunk(
     sub: pd.DataFrame,
     *,
