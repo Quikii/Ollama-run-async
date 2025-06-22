@@ -239,7 +239,7 @@ When you’re working with long PDFs or CSV text, you need to break (“split”
    - The vector store finds the top-k closest chunk vectors  
 4. **Context Injection**  
    Retrieved chunks (and their `metadata`) are stitched together into a system prompt:  
-   ```text
+
    Context:
    <chunk #1 text>
    ---
@@ -247,7 +247,7 @@ When you’re working with long PDFs or CSV text, you need to break (“split”
    …
 
    User: <your question>
-````
+
 
 5. **LLM Generation**
    The LLM uses that grounded context—so answers stay factual and traceable.
