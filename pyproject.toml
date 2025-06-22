@@ -11,17 +11,19 @@ authors = [
   { name = "Quido Haškovec", email = "quido.haskovec@gess.ethz.ch" }
 ]
 requires-python = ">=3.9"
+[project]
 dependencies = [
   "pandas",
   "numpy",
   "tqdm",
   "ollama",
   "nest_asyncio",
-  "langchain>=0.0.XX",            # core RAG tooling
-  "langchain-community>=0.0.XX",   # community embeddings (Ollama, Bedrock, etc.)
-  "faiss-cpu>=1.7.3",              # if you choose Faiss vectorstore
-  "chromadb>=0.3.21"               # if you choose Chroma vectorstore
+  "langchain>=0.0.299",
+  "langchain-community>=0.0.74",
+  "faiss-cpu>=1.7.3",
+  "chromadb>=0.3.21"
 ]
+
 
 [tool.setuptools]
 # install both flat modules
