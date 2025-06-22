@@ -1,8 +1,4 @@
-Below is a `README.md` you can drop next to your `ollama-rag-run.py`. It mirrors the style of your existing docs but focuses on the retrieval API, splitting options, metadata mappings, vector-store choices, and persistence.
-
----
-
-# Ollama RAG Retriever
+# Ollama async RAG Retriever
 
 This package provides two paired functions, `build_retriever` and `build_retriever_async`, to turn a set of PDF/CSV documents into a retrieval-augmented LLM pipeline powered by Ollama embeddings and LangChain FAISS/Chroma vector stores.
 
@@ -174,11 +170,5 @@ Use `splitter_type="semantic"` if you need sentence coherence; otherwise stick w
 
 ---
 
-## License & Contributing
 
-Please see [LICENSE](./LICENSE) and feel free to open issues or pull requests for enhancements!
-
----
-
-That’s it—happy retriever‐augmented querying!
 
