@@ -1,5 +1,5 @@
 def test_import():
-    import async_run_ollama as pl
+    import ollama_run_async  as pl
     assert hasattr(pl, "run_analysis"), "run_analysis not found in async_run_ollama"
 
     import ollama_rag_run as rag
