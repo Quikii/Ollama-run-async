@@ -1,3 +1,6 @@
+<p align="center">
+  <img src="logo/ollama-async-logo.png" alt="Ollama Async Logo" width="200" />
+</p>
 
 The functions presented in this package make it simple for researchers in social sciences to run several Large Language Models loaded through Ollama over documents stored in a data frame asynchronously (at once). As such, all models used here have to be downloaded through the Ollama interface (https://ollama.com/). With them you are able to:
 
