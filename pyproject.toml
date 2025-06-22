@@ -1,18 +1,10 @@
-[build-system]
-requires = ["setuptools>=61.0", "wheel"]
-build-backend = "setuptools.build_meta"
-
 [project]
-name = "ollama-run-async"
-version = "0.3.0"
-description = "Functions to conveniently run several Ollama helpers asynchronously for analysis of documents stored in a data frame, RAG retrieval, or creation of fake survey LLM respondents."
-readme = "ReadME.md"
-authors = [
-  { name = "Quido Haškovec", email = "quido.haskovec@gess.ethz.ch" }
-]
-requires-python = ">=3.9"
-[project]
-dependencies = [
+name             = "ollama-run-async"
+version          = "0.2.4"
+description      = "Functions to conveniently run asynchronous Ollama workflows, including RAG support."
+readme           = "ReadME.md"
+requires-python  = ">=3.9"
+dependencies     = [
   "pandas",
   "numpy",
   "tqdm",
@@ -21,10 +13,8 @@ dependencies = [
   "langchain>=0.0.299",
   "langchain-community>=0.0.74",
   "faiss-cpu>=1.7.3",
-  "chromadb>=0.3.21"
+  "chromadb>=0.3.21",
 ]
 
-
 [tool.setuptools]
-# install both flat modules
 py-modules = ["ollama_run_async", "ollama_rag_run"]
