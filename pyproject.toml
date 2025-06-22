@@ -1,10 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "ollama-run-async"
-version = "0.2.4"
-description = "Functions to conveniently run several Ollama helpers asynchronously for analysis of documents stored in a data frame or creation of fake survey LLM respondents."
-readme = "ReadME.md" 
+version = "0.3.0"
+description = "Functions to conveniently run several Ollama helpers asynchronously for analysis of documents stored in a data frame, RAG retrieval, or creation of fake survey LLM respondents."
+readme = "ReadME.md"
 authors = [
   { name = "Quido Haškovec", email = "quido.haskovec@gess.ethz.ch" }
 ]
 requires-python = ">=3.9"
-dependencies = ["pandas", "numpy", "tqdm", "ollama", "nest_asyncio"]
+dependencies = [
+  "pandas",
+  "numpy",
+  "tqdm",
+  "ollama",
+  "nest_asyncio",
+  "langchain>=0.0.XX",            # core RAG tooling
+  "langchain-community>=0.0.XX",   # community embeddings (Ollama, Bedrock, etc.)
+  "faiss-cpu>=1.7.3",              # if you choose Faiss vectorstore
+  "chromadb>=0.3.21"               # if you choose Chroma vectorstore
+]
+
+[tool.setuptools]
+# install both flat modules
+py-modules = ["ollama_run_async", "ollama_rag_run"]
