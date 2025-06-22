@@ -161,12 +161,117 @@ retriever = store.as_retriever(search_kwargs={"k":5})
 
 ---
 
-## 5 · Splitting Strategies
 
-* **RecursiveCharacterTextSplitter** (default): fixed‐size chunks plus overlap. Fast, simple.
-* **SpacyTextSplitter** (semantic): splits on sentence boundaries. Preserves meaning but depends on SpaCy pipeline.
+## 5 · Splitting & Retrieval Deep Dive
 
-Use `splitter_type="semantic"` if you need sentence coherence; otherwise stick with `"recursive"` for maximum throughput.
+When you’re working with long PDFs or CSV text, you need to break (“split”) each document into bite-sized pieces that an embedding model can handle. Later, at query time, you’ll embed your question and find the nearest chunks in that vector space—this is the core of Retrieval-Augmented Generation (RAG). Below is what happens under the hood, and the knobs you can turn.
+
+---
+
+### 5.1 Why Split at All?
+
+- **Token limits**: Ollama (and most embedding models) can only process a few thousand tokens at once.  
+- **Granular relevance**: Smaller chunks let the retriever zero in on the exact passage that matches your query.  
+- **Memory & speed**: Embedding many medium-sized chunks in parallel is faster than embedding one gigantic document over and over.
+
+---
+
+### 5.2 RecursiveCharacterTextSplitter (default)
+
+- **How it works**  
+  1. Treats the text as a long character string.  
+  2. Cuts into windows of up to `chunk_size` characters (approximately tokens).  
+  3. Rolls forward by `chunk_size – chunk_overlap` each time, so each chunk overlaps the next by `chunk_overlap` characters.  
+
+- **Pros**  
+  - Super fast, language-agnostic (no NLP pipeline required).  
+  - Overlap preserves context at chunk boundaries.
+
+- **Cons**  
+  - May split sentences or even words in half.  
+  - Chunks can feel arbitrary, which can dilute embedding quality at true semantic boundaries.
+
+---
+
+### 5.3 SpacyTextSplitter (semantic)
+
+- **How it works**  
+  1. Uses SpaCy’s sentence segmentation to break your text into logical sentences.  
+  2. Greedily groups consecutive sentences until you reach `chunk_size` tokens.  
+  3. Optional small overlap (token-level) can be configured.  
+
+- **Pros**  
+  - Chunks respect full sentence boundaries → higher coherence.  
+  - Better semantic alignment when you retrieve: each chunk usually contains a complete thought or paragraph.
+
+- **Cons**  
+  - Requires loading a SpaCy model (e.g. `en_core_web_sm`) → extra startup cost.  
+  - Slower than pure character slicing, especially on large corpora.
+
+---
+
+### 5.4 Tuning `chunk_size` & `chunk_overlap`
+
+| Parameter         | Role                                                          |
+| ----------------- | ------------------------------------------------------------- |
+| **chunk_size**    | Approximate tokens per chunk. Larger → fewer chunks overall.  |
+| **chunk_overlap** | Tokens repeated between adjacent chunks for context glazing.  |
+
+- **Small chunks** (`chunk_size≈500`):  
+  + Faster retrieval queries  
+  – May lose longer-range context  
+- **Large chunks** (`chunk_size≈2000`):  
+  + Richer context inside each vector  
+  – Fewer chunks → coarser retrieval granularity  
+- **Overlap** (`200–400` tokens is typical):  
+  Ensures that important sentences near a cut aren’t “orphaned.”
+
+---
+
+### 5.5 From Chunks to Answers
+
+1. **Embedding**  
+   Each chunk is passed through your chosen embedder (default Ollama).  
+2. **Indexing**  
+   Chunks + embeddings go into FAISS or Chroma.  
+3. **Querying**  
+   - Your input text is embedded  
+   - The vector store finds the top-k closest chunk vectors  
+4. **Context Injection**  
+   Retrieved chunks (and their `metadata`) are stitched together into a system prompt:  
+   ```text
+   Context:
+   <chunk #1 text>
+   ---
+   <chunk #2 text>
+   …
+
+   User: <your question>
+````
+
+5. **LLM Generation**
+   The LLM uses that grounded context—so answers stay factual and traceable.
+
+---
+
+### 5.6 How to Choose?
+
+| Goal                                         | Splitter Type | chunk\_size / overlap | k    |
+| -------------------------------------------- | ------------- | --------------------- | ---- |
+| **Maximum throughput** (speed & scale)       | recursive     | 1000 / 200            | 4–6  |
+| **Sentence-coherent retrieval**              | semantic      | 1200 / 200            | 6–10 |
+| **Very fine-grained lookup** (small corpora) | recursive     | 500 / 100             | 8–12 |
+| **Rich context per answer**                  | semantic      | 2000 / 400            | 3–5  |
+
+> **Rule of thumb**:
+>
+> * If your domain text is highly structured (legal, manifestos, academic) → **semantic** splitter.
+> * If you need to index tens of thousands of short documents → **recursive** splitter for raw speed.
+
+---
+
+By understanding these choices, you can balance **accuracy**, **throughput**, and **coherence** to tailor your retrieval pipeline exactly to your social-science use case.
+
 
 ---
 
