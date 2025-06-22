@@ -17,4 +17,4 @@ dependencies     = [
 ]
 
 [tool.setuptools]
-py-modules = ["ollama_run_async", "ollama_rag_run"]
+py-modules = ["async_run_ollama", "ollama_rag_run"]
