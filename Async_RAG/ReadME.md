@@ -2,7 +2,7 @@
 
 This package provides two paired functions, `build_retriever` and `build_retriever_async`, to turn a set of PDF/CSV documents into a retrieval-augmented LLM pipeline powered by Ollama embeddings and LangChain FAISS/Chroma vector stores.
 
-Each chunk you retrieve carries rich metadata (e.g. source filename, party label, CSV columns), and you can choose:
+Each chunk you retrieve carries rich metadata (e.g. source filename, author label, CSV columns), and you can choose:
 
 * **How to split** your text (recursive vs. semantic sentence splitting)
 * **Which embedder** to use (default Ollama or your own)
@@ -33,7 +33,7 @@ from ollama_rag_run import build_retriever
 
 retriever = build_retriever(
     pdf_paths=["afd.pdf","cdu.pdf"],
-    pdf_metadata_map={"afd.pdf":{"party":"AfD"}, "cdu.pdf":{"party":"CDU"}},
+    pdf_metadata_map={"speech1.pdf":{"author":"Prime Minsiter"}, "speech2.pdf":{"author":"President"}},
     csv_paths=["speeches.csv"],
     csv_text_column="text.ori",
     csv_metadata_fields=["speaker","date"],
@@ -72,7 +72,7 @@ from ollama_rag_run import build_retriever_async
 # inside an async context or Jupyter cell:
 retriever = await build_retriever_async(
     pdf_paths=["afd.pdf","cdu.pdf"],
-    pdf_metadata_map={"afd.pdf":{"party":"AfD"}, "cdu.pdf":{"party":"CDU"}},
+    pdf_metadata_map={"speech1.pdf":{"author":"Prime Minsiter"}, "speech2.pdf":{"author":"President"}},
     csv_paths=["speeches.csv"],
     csv_text_column="text.ori",
     csv_metadata_fields=["speaker","date"],
@@ -116,9 +116,9 @@ result_df = run_analysis(
     workers=4,
     prompt_template=(
         "Context snippets:\n{context}\n\n"
-        "Which party said: {text}? Answer with party only."
+        "Which author said: {text}? Answer with author only."
     ),
-    json_keys=("party",),
+    json_keys=("author",),
 )
 ```
 
